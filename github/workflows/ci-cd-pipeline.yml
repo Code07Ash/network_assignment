@@ -1,0 +1,90 @@
+name: CI/CD Pipeline that triggers terraform and ansible operations.
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+permissions:
+  contents: read
+
+jobs:
+  terraform:
+    name: "Terraform"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials setting up AWS account to access infrastructure resources
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_KEY }}
+          aws-region: "eu-west-1" # ireland'
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v1
+        with:
+          terraform_version: 1.11.0 # Use the latest stable version or the specific version you need
+
+      - name: Restore Terraform State from Cache
+        uses: actions/cache@v3
+        with:
+          path: /terraform/terraform.tfstate
+          key: terraform-state-${{ github.ref }}
+          restore-keys: |
+            terraform-state-
+
+      - name: Terraform init
+        run: terraform init
+        working-directory: ./terraform
+
+      - name: Debug SSH public key
+        run: |
+          if [ -z "${{ secrets.SSH_PUB_KEY }}" ]; then
+            echo "SSH public key is not set!"
+          else
+            echo "SSH public key is set."
+            echo "${{ secrets.SSH_PUB_KEY }}"
+          fi
+        shell: bash
+
+      - name: Planning terraform script
+        run: terraform plan -var="ssh_public_key=${{ secrets.SSH_PUB_KEY }}"
+        working-directory: ./terraform
+
+      - name: Running terrafrom script
+        run: terraform apply -auto-approve -var="ssh_public_key=${{ secrets.SSH_PUB_KEY }}"
+        working-directory: ./terraform
+
+  ansible:
+    name: "Ansible"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up SSH key for Ansible
+        run: |
+          mkdir -p ~/.ssh  # Create the directory if it doesn't exist
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa  # Map the GitHub secret to the id_rsa file
+          chmod 400 ~/.ssh/id_rsa  # Secure the private key file
+
+      - name: Docker setup
+        uses: docker/setup-buildx-action@v2
+
+      - name: Docker login
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }} # GitHub Secret for Docker Hub username
+          password: ${{ secrets.DOCKER_PASSWORD }} # GitHub Secret for Docker Hub password or token
+
+      - name: Docker Build
+        run: docker buildx build --platform linux/amd64,linux/arm64 -t ${{ secrets.DOCKER_USERNAME }}/ashish:latest --push ./app
+
+      - name: Run Ansible Playbook
+        run: ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook -i ansible-config/inventory.ini ansible-config/ansible-playbook.yml

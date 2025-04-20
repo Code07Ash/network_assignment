@@ -1,0 +1,71 @@
+---
+- name: Install Docker and Configure Nginx on EC2
+  hosts: ec2 # The group defined in inventory.ini
+  become: true # Run as sudo
+  tasks:
+    - name: Update APT package cache
+      apt:
+        update_cache: yes
+
+    - name: Install Nginx
+      apt:
+        name: nginx
+        state: present
+
+    - name: Start Nginx service
+      service:
+        name: nginx
+        state: started
+        enabled: yes
+
+    - name: Install Docker
+      apt:
+        name: docker.io
+        state: present
+
+    - name: Start Docker service
+      service:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Add user to Docker group
+      user:
+        name: ubuntu
+        group: docker
+        append: yes
+
+    - name: stop and remove the existing container
+      command: docker rm -f deadpool || true
+
+    - name: Pull the Docker image
+      command: docker pull ashhh370/ashish:latest
+
+    - name: Run the Docker container
+      command: docker run -d --name deadpool -p 5000:5000 ashhh370/ashish:latest
+
+    - name: Configure Nginx reverse proxy
+      copy:
+        content: |
+          server {
+              listen 80;
+
+              location / {
+                  proxy_pass http://localhost:5000/;
+              }
+          }
+        dest: /etc/nginx/sites-available/default
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Test nginx configuration
+      command: nginx -t
+      notify:
+        - Restart nginx
+
+  handlers:
+    - name: Restart nginx
+      service:
+        name: nginx
+        state: restarted
